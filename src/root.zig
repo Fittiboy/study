@@ -13,8 +13,10 @@ pub const Lecture = struct {
     title: []const u8,
     stage: Stage,
 
+    const Self = @This();
+
     pub fn format(
-        self: @This(),
+        self: Self,
         writer: *std.Io.Writer,
     ) std.Io.Writer.Error!void {
         try writer.print("{d};{s}", .{ @intFromEnum(self.stage), self.title });
@@ -29,7 +31,7 @@ pub const Lecture = struct {
 
     /// The returned Lecture borrows the name, and is only valid while the raw string
     /// input is valid.
-    pub fn fromString(raw: []const u8) FromStringError!@This() {
+    pub fn fromString(raw: []const u8) FromStringError!Self {
         const semicolon_index = std.mem.findScalar(u8, raw, ';') orelse {
             return error.MalformedInput;
         };
@@ -50,6 +52,14 @@ pub const Lecture = struct {
             .title = title,
             .stage = stage,
         };
+    }
+
+    pub fn compareFn(context: void, a: Self, b: Self) std.math.Order {
+        _ = context;
+        const a_val = @intFromEnum(a.stage);
+        const b_val = @intFromEnum(b.stage);
+
+        return if (a_val > b_val) .lt else if (a_val < b_val) .gt else .eq;
     }
 };
 
