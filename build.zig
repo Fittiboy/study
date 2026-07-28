@@ -36,6 +36,7 @@ pub fn build(b: *std.Build) void {
     //
     const run_step = b.step("run", "Run the CLI");
     const run = b.addRunArtifact(exe);
+    if (b.args) |args| run.addArgs(args);
     run_step.dependOn(&run.step);
 
     //  _____         _
