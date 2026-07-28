@@ -93,7 +93,7 @@ pub fn main(init: process.Init) !void {
             var next_queue = try getQueue(arena, io, data_dir, "next.txt");
 
             var lecture = current_queue.pop() orelse {
-                try stdout.print("Nothing to pop!\n", .{});
+                try stdout.print("Nothing to pop!\n\n", .{});
                 continue :blk .queue;
             };
             try fileWriteQueue(io, data_dir, "current.txt", &current_queue);
