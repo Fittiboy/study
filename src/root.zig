@@ -46,7 +46,7 @@ pub const Lecture = struct {
         self: Self,
         writer: *std.Io.Writer,
     ) std.Io.Writer.Error!void {
-        try writer.print("{f} — {s}", .{
+        try writer.print("{f} - {s}", .{
             std.fmt.Alt(Stage, Stage.formatPadded){ .data = self.stage },
             self.title,
         });
@@ -67,7 +67,10 @@ pub const Lecture = struct {
     };
     /// The returned Lecture borrows the name, and is only valid while the raw string
     /// input is valid.
-    pub fn fromString(raw: []const u8) FromStringError!Self {
+    pub fn fromString(raw_line: []const u8) FromStringError!Self {
+        // Some operating systems sneeze at the end of each line for no reason.
+        const raw = std.mem.trimEnd(u8, raw_line, "\r");
+
         const semicolon_index = std.mem.findScalar(u8, raw, ';') orelse {
             return error.MalformedInput;
         };
@@ -152,4 +155,16 @@ test "Missing Title" {
     const actual = Lecture.fromString(raw);
 
     try testing.expectError(expected, actual);
+}
+
+test "Lecture from Windows CRLF line" {
+    const actual: Lecture = try .fromString("3;Software Testing\r");
+
+    try testing.expectEqualDeep(
+        Lecture{
+            .title = "Software Testing",
+            .stage = .reconstruction,
+        },
+        actual,
+    );
 }

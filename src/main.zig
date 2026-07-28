@@ -1,7 +1,9 @@
 const std = @import("std");
 const process = std.process;
-const fatal = process.fatal;
 const mem = std.mem;
+const Dir = std.Io.Dir;
+const fatal = process.fatal;
+const builtin = @import("builtin");
 
 const study = @import("study");
 const Lecture = study.Lecture;
@@ -20,27 +22,29 @@ pub fn main(init: process.Init) !void {
 
     const cmd = try parseCommand(&args_iter);
 
-    const data_dir = try dataDir(arena, io, init.environ_map);
+    const data_path = try dataPathCreateIfAbsent(arena, io, init.environ_map);
+    const data_dir = try Dir.openDirAbsolute(io, data_path, .{});
     defer data_dir.close(io);
 
     // Handle the command
     blk: switch (cmd) {
-        .help => try stdout.print("{s}\n", .{help_text}),
+        .help => try stdout.writeAll(help_text),
+        .stages => try stdout.writeAll(stages_text),
         .queue => {
             var current_queue = try getQueue(arena, io, data_dir, "current.txt");
-            var next_queue = try getQueue(arena, io, data_dir, "next.txt");
+            var upcoming_queue = try getQueue(arena, io, data_dir, "upcoming.txt");
 
             if (current_queue.count() == 0) {
-                while (next_queue.pop()) |lecture| {
+                while (upcoming_queue.pop()) |lecture| {
                     try current_queue.push(arena, lecture);
                     if (lecture.stage == .orientation) break;
                 }
 
                 try fileWriteQueue(io, data_dir, "current.txt", &current_queue);
-                try fileWriteQueue(io, data_dir, "next.txt", &next_queue);
+                try fileWriteQueue(io, data_dir, "upcoming.txt", &upcoming_queue);
 
                 current_queue = try getQueue(arena, io, data_dir, "current.txt");
-                next_queue = try getQueue(arena, io, data_dir, "next.txt");
+                upcoming_queue = try getQueue(arena, io, data_dir, "upcoming.txt");
             }
 
             try stdout.writeAll("Current queue:\n\n");
@@ -50,10 +54,10 @@ pub fn main(init: process.Init) !void {
                 try printQueue(&current_queue, stdout);
 
             try stdout.writeAll("\nUpcoming queue:\n\n");
-            if (next_queue.count() == 0)
+            if (upcoming_queue.count() == 0)
                 try stdout.writeAll("\tEmpty!\n")
             else
-                try printQueue(&next_queue, stdout);
+                try printQueue(&upcoming_queue, stdout);
         },
         .new => {
             const title = args_iter.next() orelse
@@ -69,8 +73,8 @@ pub fn main(init: process.Init) !void {
                 }
             }
 
-            var next_queue = try getQueue(arena, io, data_dir, "next.txt");
-            for (next_queue.items) |existing| {
+            var upcoming_queue = try getQueue(arena, io, data_dir, "upcoming.txt");
+            for (upcoming_queue.items) |existing| {
                 if (std.mem.eql(u8, existing.title, lecture.title)) {
                     try stdout.print("Lecture {s} is already in the upcoming queue.\n\n", .{lecture.title});
                     continue :blk .queue;
@@ -80,9 +84,9 @@ pub fn main(init: process.Init) !void {
                     continue :blk .queue;
                 }
             }
-            try next_queue.push(arena, lecture);
+            try upcoming_queue.push(arena, lecture);
 
-            try fileWriteQueue(io, data_dir, "next.txt", &next_queue);
+            try fileWriteQueue(io, data_dir, "upcoming.txt", &upcoming_queue);
 
             try stdout.print("Added lecture {s} at stage {f}.\n\n", .{ lecture.title, lecture.stage });
 
@@ -90,7 +94,7 @@ pub fn main(init: process.Init) !void {
         },
         .pop => {
             var current_queue = try getQueue(arena, io, data_dir, "current.txt");
-            var next_queue = try getQueue(arena, io, data_dir, "next.txt");
+            var upcoming_queue = try getQueue(arena, io, data_dir, "upcoming.txt");
 
             var lecture = current_queue.pop() orelse {
                 try stdout.print("Nothing to pop!\n\n", .{});
@@ -102,26 +106,44 @@ pub fn main(init: process.Init) !void {
             if (lecture.progress()) |_| {
                 try stdout.print("{f}", .{lecture.stage});
 
-                try next_queue.push(arena, lecture);
+                try upcoming_queue.push(arena, lecture);
             } else |_| {
                 try stdout.writeAll("Finished");
             }
 
-            try fileWriteQueue(io, data_dir, "next.txt", &next_queue);
+            try fileWriteQueue(io, data_dir, "upcoming.txt", &upcoming_queue);
             try stdout.writeAll(".\n\n");
             continue :blk .queue;
         },
         .edit => {
-            const current_file = try data_dir.realPathFileAlloc(io, "current.txt", arena);
-            const next_file = try data_dir.realPathFileAlloc(io, "next.txt", arena);
+            const current_file = try Dir.path.join(arena, &.{ data_path, "current.txt" });
+            const upcoming_file = try Dir.path.join(arena, &.{ data_path, "upcoming.txt" });
 
-            const editor = init.environ_map.get("EDITOR") orelse {
-                process.fatal("$EDITOR environment variable not set.", .{});
-            };
+            if (builtin.os.tag == .windows) {
+                try stdout.print(
+                    \\Open these files in your editor:
+                    \\  {s}
+                    \\  {s}
+                    \\
+                , .{ current_file, upcoming_file });
+                break :blk;
+            }
 
-            var proc = try std.process.spawn(io, .{ .argv = &.{
-                editor, current_file, next_file,
-            } });
+            const editor = init.environ_map.get("VISUAL") orelse
+                init.environ_map.get("EDITOR") orelse
+                switch (builtin.os.tag) {
+                    .windows => "notepad.exe",
+                    else => fatal(
+                        "$VISUAL or $EDITOR environment variable not set.",
+                        .{},
+                    ),
+                };
+
+            var proc = try process.spawn(io, .{
+                .argv = &.{
+                    editor, current_file, upcoming_file,
+                },
+            });
             _ = try proc.wait(io);
 
             continue :blk .queue;
@@ -132,7 +154,7 @@ pub fn main(init: process.Init) !void {
 
 fn fileWriteQueue(
     io: std.Io,
-    dir: std.Io.Dir,
+    dir: Dir,
     filename: []const u8,
     queue: *PriorityQueue,
 ) !void {
@@ -161,7 +183,7 @@ fn printQueue(
     try writer.flush();
 }
 
-fn getQueue(gpa: mem.Allocator, io: std.Io, dir: std.Io.Dir, filename: []const u8) !PriorityQueue {
+fn getQueue(gpa: mem.Allocator, io: std.Io, dir: Dir, filename: []const u8) !PriorityQueue {
     const raw = dir.readFileAlloc(io, filename, gpa, .unlimited) catch |err| switch (err) {
         error.FileNotFound => null,
         else => return err,
@@ -175,33 +197,46 @@ fn getQueue(gpa: mem.Allocator, io: std.Io, dir: std.Io.Dir, filename: []const u
     return queue;
 }
 
-fn dataDir(gpa: mem.Allocator, io: std.Io, env: *const process.Environ.Map) !std.Io.Dir {
-    const base_data_dir_path = dataHome(gpa, env) catch |err| switch (err) {
-        error.HomeNotSet => fatal("Could not find home directory, $HOME not set.", .{}),
-        else => return err,
+fn dataPathCreateIfAbsent(gpa: mem.Allocator, io: std.Io, env: *const process.Environ.Map) ![]const u8 {
+    const base_data_dir_path = dataHome(gpa, env) catch |err| if (builtin.os.tag == .windows) {
+        fatal("Could not determine user data directory.", .{});
+    } else {
+        switch (err) {
+            error.DataHomeNotSet => fatal("Could not determine user data directory.", .{}),
+            else => return err,
+        }
     };
-    const base_data_dir = try std.Io.Dir.openDirAbsolute(io, base_data_dir_path, .{});
+    const base_data_dir = try Dir.openDirAbsolute(io, base_data_dir_path, .{});
     defer base_data_dir.close(io);
 
-    return if (base_data_dir.openDir(io, "study", .{})) |dir| dir else |err| blk: switch (err) {
-        error.FileNotFound => {
-            try base_data_dir.createDir(io, "study", .default_dir);
-            break :blk try base_data_dir.openDir(io, "study", .{});
-        },
+    base_data_dir.createDirPath(io, "study") catch |err| switch (err) {
+        error.PathAlreadyExists => {},
         else => return err,
     };
+
+    return Dir.path.join(gpa, &.{ base_data_dir_path, "study" });
 }
 
 fn dataHome(gpa: mem.Allocator, env: *const process.Environ.Map) ![]const u8 {
-    if (env.get("XDG_DATA_HOME")) |path| {
-        if (path.len != 0 and std.Io.Dir.path.isAbsolute(path)) return path;
+    if (builtin.os.tag == .windows) {
+        const local_app_data = env.get("LOCALAPPDATA") orelse return error.DataHomeNotSet;
+
+        if (local_app_data.len == 0 or !Dir.path.isAbsolute(local_app_data)) {
+            return error.DataHomeNotSet;
+        }
+
+        return local_app_data;
     }
 
-    const home = env.get("HOME") orelse return error.HomeNotSet;
-    if (home.len == 0)
-        return error.HomeNotSet;
+    if (env.get("XDG_DATA_HOME")) |path| {
+        if (path.len != 0 and Dir.path.isAbsolute(path)) return path;
+    }
 
-    return try std.Io.Dir.path.join(gpa, &.{ home, ".local", "share" });
+    const home = env.get("HOME") orelse return error.DataHomeNotSet;
+    if (home.len == 0)
+        return error.DataHomeNotSet;
+
+    return try Dir.path.join(gpa, &.{ home, ".local", "share" });
 }
 
 fn parseCommand(args_iter: *process.Args.Iterator) !Command {
@@ -214,19 +249,28 @@ fn parseCommand(args_iter: *process.Args.Iterator) !Command {
 }
 
 const command_map: std.StaticStringMap(Command) = .initComptime(.{
-    .{ "h", .help },  .{ "help", .help },   .{ "-h", .help },  .{ "--help", .help },
+    .{ "h", .help },    .{ "help", .help },
+    .{ "-h", .help },   .{ "--help", .help },
 
-    .{ "q", .queue }, .{ "queue", .queue }, .{ "-q", .queue }, .{ "--queue", .queue },
+    .{ "q", .queue },   .{ "queue", .queue },
+    .{ "-q", .queue },  .{ "--queue", .queue },
 
-    .{ "p", .pop },   .{ "pop", .pop },     .{ "-p", .pop },   .{ "--pop", .pop },
+    .{ "p", .pop },     .{ "pop", .pop },
+    .{ "-p", .pop },    .{ "--pop", .pop },
 
-    .{ "n", .new },   .{ "new", .new },     .{ "-n", .new },   .{ "--new", .new },
+    .{ "n", .new },     .{ "new", .new },
+    .{ "-n", .new },    .{ "--new", .new },
 
-    .{ "e", .edit },  .{ "edit", .edit },   .{ "-e", .edit },  .{ "--edit", .edit },
+    .{ "e", .edit },    .{ "edit", .edit },
+    .{ "-e", .edit },   .{ "--edit", .edit },
+
+    .{ "s", .stages },  .{ "stages", .stages },
+    .{ "-s", .stages }, .{ "--stages", .stages },
 });
 
 const Command = enum {
     help,
+    stages,
     queue,
     pop,
     new,
@@ -237,11 +281,36 @@ const help_text =
     \\Usage: study COMMAND [title]
     \\
     \\Available commands:
-    \\        h[elp]  — Display this help text.
-    \\        q[ueue] — Show the current queue of lectures.
-    \\        p[op]   — Mark the first lecture in the queue as complete, advancing it
-    \\                  to the next stage, or clearing it out of the queue if there is
-    \\                  no next stage.
-    \\        n[ew]   — Add a new lecture to the queue. This requires the title field.
-    \\                  The lecture will start at the orientation stage.
+    \\        h[elp]   - Display this help text.
+    \\        s[tages] - Learn what the stages actually are.
+    \\        q[ueue]  - Show the current queue of lectures.
+    \\        p[op]    - Mark the first lecture in the queue as complete, advancing it
+    \\                   to the next stage, or clearing it out of the queue if there is
+    \\                   no next stage.
+    \\        n[ew]    - Add a new lecture to the queue. This requires the title field.
+    \\                   The lecture will start at the orientation stage.
+    \\        e[dit]   - Edit the queue files directly (or output their file names
+    \\                   on Windows).
+    \\
+;
+
+const stages_text =
+    \\Orientation:    Get a first overview. What questions does the lecture want to answer,
+    \\                and roughly how?
+    \\
+    \\Conceptual:     Create a structural map of the objects of the lecture. Is there some
+    \\                hierarchy? How do ideas depend on each other? Get a first, conceptual
+    \\                understanding of the pieces, to form some level of intuition and
+    \\                familiarity.
+    \\
+    \\Technical:      Study the material in full depth. Learn derivations and proofs,
+    \\                terminology, details, etc.
+    \\
+    \\Reconstruction: Without the material in front of you, try to reconstruct it from
+    \\                memory, in as much detail as possible, to test your understanding,
+    \\                and check where you went wrong.
+    \\
+    \\Repair:         Use the output from the previous stage to fix the misunderstandings
+    \\                and gaps that led to the mistakes you made.
+    \\
 ;
