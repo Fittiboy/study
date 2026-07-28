@@ -2,6 +2,16 @@ const std = @import("std");
 
 const study = @import("study");
 
+const command_map: std.StaticStringMap(Command) = .initComptime(.{
+    .{ "h", .help },  .{ "help", .help },   .{ "-h", .help },  .{ "--help", .help },
+
+    .{ "q", .queue }, .{ "queue", .queue }, .{ "-q", .queue }, .{ "--queue", .queue },
+
+    .{ "p", .pop },   .{ "pop", .pop },     .{ "-p", .pop },   .{ "--pop", .pop },
+
+    .{ "n", .new },   .{ "new", .new },     .{ "-n", .new },   .{ "--new", .new },
+});
+
 const Command = enum {
     help,
     queue,
@@ -13,13 +23,13 @@ const help_text =
     \\Usage: study COMMAND [name]
     \\
     \\Available commands:
-    \\        help  — Display this help text.
-    \\        queue — Show the current queue of lectures.
-    \\        pop   — Mark the first lecture in the queue as complete, advancing it
-    \\                to the next stage, or clearing it out of the queue if there is
-    \\                no next stage.
-    \\        new   — Add a new lecture to the queue. This requires the name field.
-    \\                The lecture will start at the orientation stage.
+    \\        h[elp]  — Display this help text.
+    \\        q[ueue] — Show the current queue of lectures.
+    \\        p[op]   — Mark the first lecture in the queue as complete, advancing it
+    \\                  to the next stage, or clearing it out of the queue if there is
+    \\                  no next stage.
+    \\        n[ew]   — Add a new lecture to the queue. This requires the name field.
+    \\                  The lecture will start at the orientation stage.
 ;
 
 pub fn main(init: std.process.Init) !void {
@@ -31,7 +41,7 @@ pub fn main(init: std.process.Init) !void {
     _ = args_iter.skip();
 
     const cmd_string = args_iter.next();
-    const cmd: Command = if (cmd_string) |str| std.meta.stringToEnum(Command, str) orelse {
+    const cmd: Command = if (cmd_string) |str| command_map.get(str) orelse {
         std.process.fatal("\"{s}\" is not a valid command, try \"help\" instead!", .{str});
     } else .help;
 
