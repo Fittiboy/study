@@ -15,6 +15,19 @@ pub const Lecture = struct {
 
     const Self = @This();
 
+    const ProgressError = error{NoNextStage};
+    pub fn progress(self: *Self) ProgressError!void {
+        self.stage = std.enums.fromInt(Stage, @intFromEnum(self.stage) + 1) orelse
+            return error.NoNextStage;
+    }
+
+    pub fn formatHuman(
+        self: Self,
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        try writer.print("{t: <14} — {s}", .{ self.stage, self.title });
+    }
+
     pub fn format(
         self: Self,
         writer: *std.Io.Writer,
@@ -28,7 +41,6 @@ pub const Lecture = struct {
         InvalidStage,
         MissingTitle,
     };
-
     /// The returned Lecture borrows the name, and is only valid while the raw string
     /// input is valid.
     pub fn fromString(raw: []const u8) FromStringError!Self {
