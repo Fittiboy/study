@@ -5,7 +5,10 @@ const study = @import("study");
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const arena = init.arena.allocator();
-    _ = io;
+
+    var stdout_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.File.Writer = .init(.stdout(), io, &stdout_buf);
+    const stdout = &stdout_writer.interface;
 
     var args_iter = try init.minimal.args.iterateAllocator(arena);
     _ = args_iter.skip();
@@ -23,9 +26,11 @@ pub fn main(init: std.process.Init) !void {
     if (name) |str| std.debug.print("Lecture name: {s}\n", .{str});
 
     switch (cmd) {
-        .help => std.debug.print("{s}\n", .{help_text}),
+        .help => try stdout.print("{s}\n", .{help_text}),
         .queue, .pop, .new => {},
     }
+
+    try stdout.flush();
 }
 
 const command_map: std.StaticStringMap(Command) = .initComptime(.{
