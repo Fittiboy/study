@@ -7,6 +7,23 @@ pub const Stage = enum(u3) {
     technical,
     reconstruction,
     repair,
+
+    pub fn format(
+        self: @This(),
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        const name = @tagName(self);
+        try writer.print("{c}{s}", .{ std.ascii.toUpper(name[0]), name[1..] });
+    }
+
+    pub fn formatPadded(
+        self: @This(),
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        const name = @tagName(self);
+        for (0..14 - name.len) |_| try writer.writeByte(' ');
+        try writer.print("{c}{s}", .{ std.ascii.toUpper(name[0]), name[1..] });
+    }
 };
 
 pub const Lecture = struct {
@@ -14,6 +31,10 @@ pub const Lecture = struct {
     stage: Stage,
 
     const Self = @This();
+
+    pub fn new(title: []const u8) Self {
+        return .{ .title = title, .stage = .orientation };
+    }
 
     const ProgressError = error{NoNextStage};
     pub fn progress(self: *Self) ProgressError!void {
@@ -25,7 +46,10 @@ pub const Lecture = struct {
         self: Self,
         writer: *std.Io.Writer,
     ) std.Io.Writer.Error!void {
-        try writer.print("{t: <14} — {s}", .{ self.stage, self.title });
+        try writer.print("{f} — {s}", .{
+            std.fmt.Alt(Stage, Stage.formatPadded){ .data = self.stage },
+            self.title,
+        });
     }
 
     pub fn format(
