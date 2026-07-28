@@ -1,36 +1,83 @@
 const std = @import("std");
+const process = std.process;
+const fatal = process.fatal;
+const mem = std.mem;
 
 const study = @import("study");
 
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: process.Init) !void {
     const io = init.io;
     const arena = init.arena.allocator();
 
-    var stdout_buf: [1024]u8 = undefined;
-    var stdout_writer: std.Io.File.Writer = .init(.stdout(), io, &stdout_buf);
-    const stdout = &stdout_writer.interface;
-
     var args_iter = try init.minimal.args.iterateAllocator(arena);
-    _ = args_iter.skip();
 
-    const cmd_string = args_iter.next();
-    const cmd: Command = if (cmd_string) |str| command_map.get(str) orelse {
-        std.process.fatal("\"{s}\" is not a valid command, try \"help\" instead!", .{str});
-    } else .help;
+    var buf_stdout: [1024]u8 = undefined;
+    var writer_stdout: std.Io.File.Writer = .init(.stdout(), io, &buf_stdout);
+    const stdout = &writer_stdout.interface;
 
-    const name: ?[]const u8 = if (cmd == .new) if (args_iter.next()) |str| str else {
-        std.process.fatal("\"{t}\" command issued, but missing \"name\" field", .{cmd});
-    } else null;
+    const cmd = try parseCommand(&args_iter);
+    const name: ?[]const u8 = args_iter.next();
+    if (cmd == .new and name == null)
+        fatal("\"{t}\" command issued, but missing \"name\" field", .{cmd});
 
     std.debug.print("Command: {t}\n", .{cmd});
     if (name) |str| std.debug.print("Lecture name: {s}\n", .{str});
 
+    // Handle the command
     switch (cmd) {
         .help => try stdout.print("{s}\n", .{help_text}),
         .queue, .pop, .new => {},
     }
-
     try stdout.flush();
+
+    const base_data_dir_path = dataHome(arena, init.environ_map) catch |err| switch (err) {
+        error.HomeNotSet => fatal("Could not find home directory, $HOME not set.", .{}),
+        else => return err,
+    };
+    const base_data_dir = try std.Io.Dir.openDirAbsolute(io, base_data_dir_path, .{});
+    defer base_data_dir.close(io);
+
+    const data_dir = if (base_data_dir.openDir(io, "study", .{})) |dir| dir else |err| blk: switch (err) {
+        error.FileNotFound => {
+            try base_data_dir.createDir(io, "study", .default_dir);
+            break :blk try base_data_dir.openDir(io, "study", .{});
+        },
+        else => return err,
+    };
+    defer data_dir.close(io);
+
+    var atomic_file_current = try data_dir.createFileAtomic(io, "current.txt", .{ .replace = true });
+    defer atomic_file_current.deinit(io);
+
+    var buf_file_current: [1024]u8 = undefined;
+    var writer_current: std.Io.File.Writer = .init(atomic_file_current.file, io, &buf_file_current);
+    const current = &writer_current.interface;
+
+    try current.writeAll("Hello from study!");
+    try current.flush();
+
+    try atomic_file_current.replace(io);
+}
+
+fn dataHome(gpa: mem.Allocator, env: *const process.Environ.Map) ![]const u8 {
+    if (env.get("XDG_DATA_HOME")) |path| {
+        if (path.len != 0 and std.fs.path.isAbsolute(path)) return path;
+    }
+
+    const home = env.get("HOME") orelse return error.HomeNotSet;
+    if (home.len == 0)
+        return error.HomeNotSet;
+
+    return try std.fs.path.join(gpa, &.{ home, ".local", "share" });
+}
+
+fn parseCommand(args_iter: *process.Args.Iterator) !Command {
+    _ = args_iter.skip();
+
+    const cmd_string = args_iter.next();
+    return if (cmd_string) |str| command_map.get(str) orelse {
+        fatal("\"{s}\" is not a valid command, try \"help\" instead!", .{str});
+    } else .help;
 }
 
 const command_map: std.StaticStringMap(Command) = .initComptime(.{
