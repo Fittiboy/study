@@ -39,7 +39,7 @@ jobs:
         run: >
           zig build
           -Dtarget=${{ matrix.target }}
-          -Doptimize=ReleaseSmall
+          -Doptimize=ReleaseSafe
 
       - name: Prepare download
         shell: bash

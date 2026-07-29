@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+
+      - name: Check tag matches build.zig.zon
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package_version="$(
+            sed -n 's/.*\.version = "\([^"]*\)".*/\1/p' build.zig.zon
+          )"
+
+          tag_version="${GITHUB_REF_NAME#v}"
+
+          if [[ "$package_version" != "$tag_version" ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match build.zig.zon version ${package_version}"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: zig build test
+
+      - name: Build release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME#v}"
+
+          mkdir -p \
+            dist \
+            staging/linux \
+            staging/windows
+
+          # Linux
+          zig build \
+            -Dtarget=x86_64-linux-musl \
+            -Doptimize=ReleaseSmall
+
+          install \
+            -m 755 \
+            zig-out/bin/study \
+            staging/linux/study
+
+          tar \
+            -C staging/linux \
+            -czf "dist/study-${version}-linux-x86_64.tar.gz" \
+            study
+
+          # Windows
+          zig build \
+            -Dtarget=x86_64-windows-gnu \
+            -Doptimize=ReleaseSmall
+
+          install \
+            -m 644 \
+            zig-out/bin/study.exe \
+            staging/windows/study.exe
+
+          (
+            cd staging/windows
+            zip \
+              -9 \
+              "../../dist/study-${version}-windows-x86_64.zip" \
+              study.exe
+          )
+
+          # Checksums
+          (
+            cd dist
+            sha256sum study-* > SHA256SUMS
+          )
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create \
+            "$GITHUB_REF_NAME" \
+            dist/* \
+            --verify-tag \
+            --generate-notes \
+            --title "study $GITHUB_REF_NAME"
