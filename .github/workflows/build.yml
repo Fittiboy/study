@@ -1,0 +1,58 @@
+name: Build executables
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-linux-musl
+            source_file: study
+            download_file: study-linux-x86_64
+
+          - target: x86_64-windows-gnu
+            source_file: study.exe
+            download_file: study-windows-x86_64.exe
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          cache-key: ${{ matrix.target }}
+
+      - name: Build executable
+        run: >
+          zig build
+          -Dtarget=${{ matrix.target }}
+          -Doptimize=ReleaseSmall
+
+      - name: Prepare download
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp \
+            "zig-out/bin/${{ matrix.source_file }}" \
+            "dist/${{ matrix.download_file }}"
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/${{ matrix.download_file }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
