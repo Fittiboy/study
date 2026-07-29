@@ -178,7 +178,7 @@ fn printQueue(
     writer: *std.Io.Writer,
 ) !void {
     while (queue.pop()) |lecture| {
-        try writer.print("  {f}\n", .{std.fmt.Alt(Lecture, Lecture.formatHuman){ .data = lecture }});
+        try writer.print("  {f}\n", .{std.fmt.alt(lecture, .formatHuman)});
     }
     try writer.flush();
 }
