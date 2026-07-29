@@ -9,6 +9,23 @@ const study = @import("study");
 const Lecture = study.Lecture;
 
 const PriorityQueue = std.PriorityQueue(Lecture, void, Lecture.compareFn);
+const InactiveQueue = std.ArrayList(Lecture);
+
+const Queue = union(enum) {
+    priority: *PriorityQueue,
+    inactive: *InactiveQueue,
+
+    pub fn isEmpty(self: @This()) bool {
+        return switch (self) {
+            .priority => |q| q.count() == 0,
+            .inactive => |q| q.items.len == 0,
+        };
+    }
+};
+
+const current_filename = "current.txt";
+const upcoming_filename = "upcoming.txt";
+const inactive_filename = "inactive.txt";
 
 pub fn main(init: process.Init) !void {
     const io = init.io;
@@ -31,33 +48,57 @@ pub fn main(init: process.Init) !void {
         .help => try stdout.writeAll(help_text),
         .stages => try stdout.writeAll(stages_text),
         .queue => {
-            var current_queue = try getQueue(arena, io, data_dir, "current.txt");
-            var upcoming_queue = try getQueue(arena, io, data_dir, "upcoming.txt");
+            var current_queue = try getQueue(arena, io, data_dir, current_filename);
+            var upcoming_queue = try getQueue(arena, io, data_dir, upcoming_filename);
+            var inactive_queue = try getInactive(arena, io, data_dir);
+
+            const fresh_lecture: bool = for (upcoming_queue.items) |lecture| {
+                if (lecture.stage == .orientation) break true;
+            } else false;
+
+            if (!fresh_lecture and inactive_queue.items.len > 0)
+                try upcoming_queue.push(arena, inactive_queue.orderedRemove(0));
 
             if (current_queue.count() == 0) {
                 while (upcoming_queue.pop()) |lecture| {
                     try current_queue.push(arena, lecture);
-                    if (lecture.stage == .orientation) break;
                 }
 
-                try fileWriteQueue(io, data_dir, "current.txt", &current_queue);
-                try fileWriteQueue(io, data_dir, "upcoming.txt", &upcoming_queue);
-
-                current_queue = try getQueue(arena, io, data_dir, "current.txt");
-                upcoming_queue = try getQueue(arena, io, data_dir, "upcoming.txt");
+                try fileWriteQueue(
+                    io,
+                    data_dir,
+                    current_filename,
+                    .{ .priority = &current_queue },
+                );
+                try fileWriteQueue(
+                    io,
+                    data_dir,
+                    upcoming_filename,
+                    .{ .priority = &upcoming_queue },
+                );
+                try fileWriteQueue(
+                    io,
+                    data_dir,
+                    inactive_filename,
+                    .{ .inactive = &inactive_queue },
+                );
             }
 
-            try stdout.writeAll("Current queue:\n\n");
-            if (current_queue.count() == 0)
-                try stdout.writeAll("\tEmpty!\n")
-            else
-                try printQueue(&current_queue, stdout);
-
-            try stdout.writeAll("\nUpcoming queue:\n\n");
-            if (upcoming_queue.count() == 0)
-                try stdout.writeAll("\tEmpty!\n")
-            else
-                try printQueue(&upcoming_queue, stdout);
+            for ([_]Queue{
+                .{ .priority = &current_queue },
+                .{ .priority = &upcoming_queue },
+                .{ .inactive = &inactive_queue },
+            }, [_][]const u8{
+                "Current",
+                "Upcoming",
+                "Inactive",
+            }) |queue, name| {
+                try stdout.print("{s} queue:\n\n", .{name});
+                if (queue.isEmpty())
+                    try stdout.writeAll("\tEmpty!\n\n")
+                else
+                    try printQueue(stdout, queue);
+            }
         },
         .new => {
             const title = args_iter.next() orelse
@@ -65,44 +106,61 @@ pub fn main(init: process.Init) !void {
 
             const lecture: Lecture = .new(title);
 
-            const current_queue = try getQueue(arena, io, data_dir, "current.txt");
-            for (current_queue.items) |existing| {
-                if (std.mem.eql(u8, existing.title, lecture.title)) {
-                    try stdout.print("Lecture {s} is already in the current queue.\n\n", .{lecture.title});
-                    continue :blk .queue;
+            const current_queue = try getQueue(arena, io, data_dir, current_filename);
+            const upcoming_queue = try getQueue(arena, io, data_dir, upcoming_filename);
+            var inactive_queue = try getInactive(arena, io, data_dir);
+
+            for ([_][]Lecture{
+                current_queue.items,
+                upcoming_queue.items,
+                inactive_queue.items,
+            }) |queued_lectures| {
+                for (queued_lectures) |queued| {
+                    if (std.mem.eql(u8, queued.title, lecture.title)) {
+                        try stdout.print(
+                            "Lecture {s} is already in the current queue.\n\n",
+                            .{lecture.title},
+                        );
+                        continue :blk .queue;
+                    }
                 }
             }
 
-            var upcoming_queue = try getQueue(arena, io, data_dir, "upcoming.txt");
-            for (upcoming_queue.items) |existing| {
-                if (std.mem.eql(u8, existing.title, lecture.title)) {
-                    try stdout.print("Lecture {s} is already in the upcoming queue.\n\n", .{lecture.title});
-                    continue :blk .queue;
-                }
-                if (existing.stage == .orientation) {
-                    try stdout.writeAll("You should not add more than one fresh lecture at a time!\n\n");
-                    continue :blk .queue;
-                }
-            }
-            try upcoming_queue.push(arena, lecture);
+            try inactive_queue.append(arena, lecture);
 
-            try fileWriteQueue(io, data_dir, "upcoming.txt", &upcoming_queue);
+            try fileWriteQueue(
+                io,
+                data_dir,
+                inactive_filename,
+                .{ .inactive = &inactive_queue },
+            );
 
-            try stdout.print("Added lecture {s} at stage {f}.\n\n", .{ lecture.title, lecture.stage });
+            try stdout.print(
+                "Added lecture {s} at stage {f}.\n\n",
+                .{ lecture.title, lecture.stage },
+            );
 
             continue :blk .queue;
         },
         .pop => {
-            var current_queue = try getQueue(arena, io, data_dir, "current.txt");
-            var upcoming_queue = try getQueue(arena, io, data_dir, "upcoming.txt");
+            var current_queue = try getQueue(arena, io, data_dir, current_filename);
+            var upcoming_queue = try getQueue(arena, io, data_dir, upcoming_filename);
 
             var lecture = current_queue.pop() orelse {
                 try stdout.print("Nothing to pop!\n\n", .{});
                 continue :blk .queue;
             };
-            try fileWriteQueue(io, data_dir, "current.txt", &current_queue);
+            try fileWriteQueue(
+                io,
+                data_dir,
+                current_filename,
+                .{ .priority = &current_queue },
+            );
 
-            try stdout.print("Updated lecture {s} from {f} to ", .{ lecture.title, lecture.stage });
+            try stdout.print(
+                "Updated lecture {s} from {f} to ",
+                .{ lecture.title, lecture.stage },
+            );
             if (lecture.progress()) |_| {
                 try stdout.print("{f}", .{lecture.stage});
 
@@ -111,13 +169,24 @@ pub fn main(init: process.Init) !void {
                 try stdout.writeAll("Finished");
             }
 
-            try fileWriteQueue(io, data_dir, "upcoming.txt", &upcoming_queue);
+            try fileWriteQueue(
+                io,
+                data_dir,
+                upcoming_filename,
+                .{ .priority = &upcoming_queue },
+            );
             try stdout.writeAll(".\n\n");
             continue :blk .queue;
         },
         .edit => {
-            const current_file = try Dir.path.join(arena, &.{ data_path, "current.txt" });
-            const upcoming_file = try Dir.path.join(arena, &.{ data_path, "upcoming.txt" });
+            const current_file = try Dir.path.join(
+                arena,
+                &.{ data_path, current_filename },
+            );
+            const upcoming_file = try Dir.path.join(
+                arena,
+                &.{ data_path, upcoming_filename },
+            );
 
             if (builtin.os.tag == .windows) {
                 try stdout.print(
@@ -156,16 +225,24 @@ fn fileWriteQueue(
     io: std.Io,
     dir: Dir,
     filename: []const u8,
-    queue: *PriorityQueue,
+    queue: Queue,
 ) !void {
-    var atomic_file = try dir.createFileAtomic(io, filename, .{ .replace = true });
+    var atomic_file = try dir.createFileAtomic(
+        io,
+        filename,
+        .{ .replace = true },
+    );
     defer atomic_file.deinit(io);
 
     var buf_file: [1024]u8 = undefined;
     var writer: std.Io.File.Writer = .init(atomic_file.file, io, &buf_file);
     const file = &writer.interface;
 
-    while (queue.pop()) |lecture| {
+    const items = switch (queue) {
+        inline else => |q| q.items,
+    };
+
+    for (items) |lecture| {
         try file.print("{f}\n", .{lecture});
     }
     try file.flush();
@@ -174,20 +251,33 @@ fn fileWriteQueue(
 }
 
 fn printQueue(
-    queue: *PriorityQueue,
     writer: *std.Io.Writer,
+    queue: Queue,
 ) !void {
-    while (queue.pop()) |lecture| {
-        try writer.print("  {f}\n", .{std.fmt.alt(lecture, .formatHuman)});
+    switch (queue) {
+        .priority => |q| {
+            while (q.pop()) |lecture|
+                try writer.print("  {f}\n", .{std.fmt.alt(lecture, .formatHuman)});
+        },
+        .inactive => |q| {
+            for (q.items) |lecture|
+                try writer.print("  {f}\n", .{std.fmt.alt(lecture, .formatHuman)});
+        },
     }
     try writer.flush();
 }
 
-fn getQueue(gpa: mem.Allocator, io: std.Io, dir: Dir, filename: []const u8) !PriorityQueue {
-    const raw = dir.readFileAlloc(io, filename, gpa, .unlimited) catch |err| switch (err) {
-        error.FileNotFound => null,
-        else => return err,
-    };
+fn getQueue(
+    gpa: mem.Allocator,
+    io: std.Io,
+    dir: Dir,
+    filename: []const u8,
+) !PriorityQueue {
+    const raw = dir.readFileAlloc(io, filename, gpa, .unlimited) catch |err|
+        switch (err) {
+            error.FileNotFound => null,
+            else => return err,
+        };
     var queue: PriorityQueue = .empty;
     if (raw) |str| {
         var iter = std.mem.tokenizeScalar(u8, str, '\n');
@@ -197,15 +287,41 @@ fn getQueue(gpa: mem.Allocator, io: std.Io, dir: Dir, filename: []const u8) !Pri
     return queue;
 }
 
-fn dataPathCreateIfAbsent(gpa: mem.Allocator, io: std.Io, env: *const process.Environ.Map) ![]const u8 {
-    const base_data_dir_path = dataHome(gpa, env) catch |err| if (builtin.os.tag == .windows) {
-        fatal("Could not determine user data directory.", .{});
-    } else {
-        switch (err) {
-            error.DataHomeNotSet => fatal("Could not determine user data directory.", .{}),
-            else => return err,
-        }
+fn getInactive(gpa: mem.Allocator, io: std.Io, dir: Dir) !InactiveQueue {
+    const raw = dir.readFileAlloc(
+        io,
+        inactive_filename,
+        gpa,
+        .unlimited,
+    ) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
     };
+    var queue: InactiveQueue = .empty;
+    if (raw) |str| {
+        var iter = std.mem.tokenizeScalar(u8, str, '\n');
+        while (iter.next()) |line| try queue.append(gpa, try .fromString(line));
+    }
+
+    return queue;
+}
+
+fn dataPathCreateIfAbsent(
+    gpa: mem.Allocator,
+    io: std.Io,
+    env: *const process.Environ.Map,
+) ![]const u8 {
+    const base_data_dir_path = dataHome(gpa, env) catch |err|
+        if (builtin.os.tag == .windows) {
+            fatal("Could not determine user data directory.", .{});
+        } else {
+            switch (err) {
+                error.DataHomeNotSet => {
+                    fatal("Could not determine user data directory.", .{});
+                },
+                else => return err,
+            }
+        };
     const base_data_dir = try Dir.openDirAbsolute(io, base_data_dir_path, .{});
     defer base_data_dir.close(io);
 
@@ -219,18 +335,17 @@ fn dataPathCreateIfAbsent(gpa: mem.Allocator, io: std.Io, env: *const process.En
 
 fn dataHome(gpa: mem.Allocator, env: *const process.Environ.Map) ![]const u8 {
     if (builtin.os.tag == .windows) {
-        const local_app_data = env.get("LOCALAPPDATA") orelse return error.DataHomeNotSet;
-
-        if (local_app_data.len == 0 or !Dir.path.isAbsolute(local_app_data)) {
+        const local_app_data = env.get("LOCALAPPDATA") orelse
             return error.DataHomeNotSet;
-        }
+
+        if (local_app_data.len == 0 or !Dir.path.isAbsolute(local_app_data))
+            return error.DataHomeNotSet;
 
         return local_app_data;
     }
 
-    if (env.get("XDG_DATA_HOME")) |path| {
+    if (env.get("XDG_DATA_HOME")) |path|
         if (path.len != 0 and Dir.path.isAbsolute(path)) return path;
-    }
 
     const home = env.get("HOME") orelse return error.DataHomeNotSet;
     if (home.len == 0)
