@@ -52,20 +52,9 @@ pub fn main(init: process.Init) !void {
             var upcoming_queue = try getQueue(arena, io, data_dir, upcoming_filename);
             var inactive_queue = try getInactive(arena, io, data_dir);
 
-            const fresh_lecture: bool = for (upcoming_queue.items) |lecture| {
-                if (lecture.stage == .orientation) break true;
-            } else false;
-
             var current_dirty = false;
             var upcoming_dirty = false;
             var inactive_dirty = false;
-
-            if (!fresh_lecture and inactive_queue.items.len > 0) {
-                try upcoming_queue.push(arena, inactive_queue.orderedRemove(0));
-
-                upcoming_dirty = true;
-                inactive_dirty = true;
-            }
 
             if (current_queue.count() == 0) {
                 while (upcoming_queue.pop()) |lecture| {
@@ -74,6 +63,17 @@ pub fn main(init: process.Init) !void {
 
                 current_dirty = true;
                 upcoming_dirty = true;
+            }
+
+            const fresh_lecture: bool = for (upcoming_queue.items) |lecture| {
+                if (lecture.stage == .orientation) break true;
+            } else false;
+
+            if (!fresh_lecture and inactive_queue.items.len > 0) {
+                try upcoming_queue.push(arena, inactive_queue.orderedRemove(0));
+
+                upcoming_dirty = true;
+                inactive_dirty = true;
             }
 
             for (
