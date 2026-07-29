@@ -188,35 +188,30 @@ pub fn main(init: process.Init) !void {
                 &.{ data_path, inactive_filename },
             );
 
-            if (builtin.os.tag == .windows) {
-                try stdout.print(
-                    \\Open these files in your editor:
-                    \\  {s}
-                    \\  {s}
-                    \\  {s}
-                    \\
-                , .{ current_file, upcoming_file, inactive_file });
-                break :blk;
+            const maybe_editor = if (builtin.os.tag == .windows)
+                null
+            else
+                init.environ_map.get("VISUAL") orelse
+                    init.environ_map.get("EDITOR");
+
+            if (maybe_editor) |editor| editor: {
+                if (editor.len == 0) break :editor;
+                var proc = try process.spawn(io, .{
+                    .argv = &.{
+                        editor, current_file, upcoming_file, inactive_file,
+                    },
+                });
+                _ = try proc.wait(io);
+                continue :blk .queue;
             }
 
-            const editor = init.environ_map.get("VISUAL") orelse
-                init.environ_map.get("EDITOR") orelse
-                switch (builtin.os.tag) {
-                    .windows => "notepad.exe",
-                    else => fatal(
-                        "$VISUAL or $EDITOR environment variable not set.",
-                        .{},
-                    ),
-                };
-
-            var proc = try process.spawn(io, .{
-                .argv = &.{
-                    editor, current_file, upcoming_file, inactive_file,
-                },
-            });
-            _ = try proc.wait(io);
-
-            continue :blk .queue;
+            try stdout.print(
+                \\Open these files in your editor:
+                \\  {s}
+                \\  {s}
+                \\  {s}
+                \\
+            , .{ current_file, upcoming_file, inactive_file });
         },
     }
     try stdout.flush();
