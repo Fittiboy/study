@@ -95,9 +95,10 @@ pub fn main(init: process.Init) !void {
             }) |queue, name| {
                 try stdout.print("{s} queue:\n\n", .{name});
                 if (queue.isEmpty())
-                    try stdout.writeAll("\tEmpty!\n\n")
+                    try stdout.writeAll("\tEmpty!\n")
                 else
                     try printQueue(stdout, queue);
+                try stdout.writeAll("\n");
             }
         },
         .new => {
