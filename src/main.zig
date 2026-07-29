@@ -188,14 +188,19 @@ pub fn main(init: process.Init) !void {
                 arena,
                 &.{ data_path, upcoming_filename },
             );
+            const inactive_file = try Dir.path.join(
+                arena,
+                &.{ data_path, inactive_filename },
+            );
 
             if (builtin.os.tag == .windows) {
                 try stdout.print(
                     \\Open these files in your editor:
                     \\  {s}
                     \\  {s}
+                    \\  {s}
                     \\
-                , .{ current_file, upcoming_file });
+                , .{ current_file, upcoming_file, inactive_file });
                 break :blk;
             }
 
@@ -211,7 +216,7 @@ pub fn main(init: process.Init) !void {
 
             var proc = try process.spawn(io, .{
                 .argv = &.{
-                    editor, current_file, upcoming_file,
+                    editor, current_file, upcoming_file, inactive_file,
                 },
             });
             _ = try proc.wait(io);
