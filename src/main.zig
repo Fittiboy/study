@@ -47,55 +47,7 @@ pub fn main(init: process.Init) !void {
     blk: switch (cmd) {
         .help => try stdout.writeAll(help_text),
         .stages => try stdout.writeAll(stages_text),
-        .queue => {
-            var current_queue = try getQueue(arena, io, data_dir, current_filename);
-            var upcoming_queue = try getQueue(arena, io, data_dir, upcoming_filename);
-            var inactive_queue = try getInactive(arena, io, data_dir);
-
-            var current_dirty = false;
-            var upcoming_dirty = false;
-            var inactive_dirty = false;
-
-            if (current_queue.count() == 0) {
-                while (upcoming_queue.pop()) |lecture| {
-                    try current_queue.push(arena, lecture);
-                }
-
-                current_dirty = true;
-                upcoming_dirty = true;
-            }
-
-            const fresh_lecture: bool = for (upcoming_queue.items) |lecture| {
-                if (lecture.stage == .orientation) break true;
-            } else false;
-
-            if (!fresh_lecture and inactive_queue.items.len > 0) {
-                try upcoming_queue.push(arena, inactive_queue.orderedRemove(0));
-
-                upcoming_dirty = true;
-                inactive_dirty = true;
-            }
-
-            for (
-                [_]Queue{
-                    .{ .priority = &current_queue },
-                    .{ .priority = &upcoming_queue },
-                    .{ .inactive = &inactive_queue },
-                },
-                [_][]const u8{ current_filename, upcoming_filename, inactive_filename },
-                [_][]const u8{ "Current", "Upcoming", "Inactive" },
-                [_]bool{ current_dirty, upcoming_dirty, inactive_dirty },
-            ) |queue, filename, name, dirty| {
-                if (dirty) try fileWriteQueue(io, data_dir, filename, queue);
-
-                try stdout.print("{s} queue:\n\n", .{name});
-                if (queue.isEmpty())
-                    try stdout.writeAll("\tEmpty!\n")
-                else
-                    try printQueue(stdout, queue);
-                try stdout.writeAll("\n");
-            }
-        },
+        .queue => try flushQueues(io, arena, stdout, data_dir),
         .new => {
             const title = args_iter.next() orelse
                 fatal("\"{t}\" command issued, but missing \"title\" field.", .{cmd});
@@ -215,6 +167,73 @@ pub fn main(init: process.Init) !void {
         },
     }
     try stdout.flush();
+}
+
+fn flushQueues(
+    io: std.Io,
+    gpa: mem.Allocator,
+    writer: *std.Io.Writer,
+    data_dir: Dir,
+) !void {
+    var current_queue = try getQueue(gpa, io, data_dir, current_filename);
+    var upcoming_queue = try getQueue(gpa, io, data_dir, upcoming_filename);
+    var inactive_queue = try getInactive(gpa, io, data_dir);
+
+    var current_dirty = false;
+    var upcoming_dirty = false;
+    var inactive_dirty = false;
+
+    const no_current = current_queue.count() == 0;
+    const no_upcoming = upcoming_queue.count() == 0;
+    var some_inactive = inactive_queue.items.len > 0;
+
+    if (no_current and no_upcoming) {
+        if (some_inactive) {
+            try current_queue.push(gpa, inactive_queue.orderedRemove(0));
+            some_inactive = inactive_queue.items.len > 0;
+
+            current_dirty = true;
+            inactive_dirty = true;
+        }
+    } else if (no_current) {
+        while (upcoming_queue.pop()) |lecture| {
+            try current_queue.push(gpa, lecture);
+        }
+
+        current_dirty = true;
+        upcoming_dirty = true;
+    }
+
+    const fresh_lecture: bool = for (upcoming_queue.items) |lecture| {
+        if (lecture.stage == .orientation) break true;
+    } else false;
+
+    if (!fresh_lecture and some_inactive) {
+        try upcoming_queue.push(gpa, inactive_queue.orderedRemove(0));
+
+        upcoming_dirty = true;
+        inactive_dirty = true;
+    }
+
+    for (
+        [_]Queue{
+            .{ .priority = &current_queue },
+            .{ .priority = &upcoming_queue },
+            .{ .inactive = &inactive_queue },
+        },
+        [_][]const u8{ current_filename, upcoming_filename, inactive_filename },
+        [_][]const u8{ "Current", "Upcoming", "Inactive" },
+        [_]bool{ current_dirty, upcoming_dirty, inactive_dirty },
+    ) |queue, filename, name, dirty| {
+        if (dirty) try fileWriteQueue(io, data_dir, filename, queue);
+
+        try writer.print("{s} queue:\n\n", .{name});
+        if (queue.isEmpty())
+            try writer.writeAll("\tEmpty!\n")
+        else
+            try printQueue(writer, queue);
+        try writer.writeAll("\n");
+    }
 }
 
 fn fileWriteQueue(
