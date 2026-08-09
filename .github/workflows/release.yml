@@ -28,7 +28,6 @@ jobs:
           package_version="$(
             sed -n 's/.*\.version = "\([^"]*\)".*/\1/p' build.zig.zon
           )"
-
           tag_version="${GITHUB_REF_NAME#v}"
 
           if [[ "$package_version" != "$tag_version" ]]; then
@@ -39,52 +38,36 @@ jobs:
       - name: Run tests
         run: zig build test
 
+      - name: Build release binaries
+        run: zig build release
+
       - name: Build release archives
         shell: bash
         run: |
           set -euo pipefail
 
           version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
 
-          mkdir -p \
-            dist \
-            staging/linux \
-            staging/windows
+          for dir in zig-out/*; do
+            [[ -d "$dir" ]] || continue
 
-          # Linux
-          zig build \
-            -Dtarget=x86_64-linux-musl \
-            -Doptimize=ReleaseSmall
+            target="${dir#zig-out/}"
 
-          install \
-            -m 755 \
-            zig-out/bin/study \
-            staging/linux/study
+            if [[ -f "$dir/study.exe" ]]; then
+              zip \
+                -9 \
+                -j \
+                "dist/study-${version}-${target}.zip" \
+                "$dir/study.exe"
+            elif [[ -f "$dir/study" ]]; then
+              tar \
+                -C "$dir" \
+                -czf "dist/study-${version}-${target}.tar.gz" \
+                study
+            fi
+          done
 
-          tar \
-            -C staging/linux \
-            -czf "dist/study-${version}-linux-x86_64.tar.gz" \
-            study
-
-          # Windows
-          zig build \
-            -Dtarget=x86_64-windows-gnu \
-            -Doptimize=ReleaseSmall
-
-          install \
-            -m 644 \
-            zig-out/bin/study.exe \
-            staging/windows/study.exe
-
-          (
-            cd staging/windows
-            zip \
-              -9 \
-              "../../dist/study-${version}-windows-x86_64.zip" \
-              study.exe
-          )
-
-          # Checksums
           (
             cd dist
             sha256sum study-* > SHA256SUMS
