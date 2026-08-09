@@ -1,6 +1,6 @@
 .{
     .name = .study,
-    .version = "2.0.0",
+    .version = "2.0.1",
     .minimum_zig_version = "0.16.0",
     .paths = .{""},
     .fingerprint = 0xe67f9749f799bacf,
